@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Jukebox specific
+music/
+!music/demo.*
+*.log
+playback.log

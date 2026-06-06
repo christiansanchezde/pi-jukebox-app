@@ -1,0 +1,15 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# C++ files
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+
+# Build scripts
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+
+# Python
+*.py text eol=lf
