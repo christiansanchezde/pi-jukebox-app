@@ -8,4 +8,4 @@ cd /home/chris/jukebox
 . .venv/bin/activate
 
 # exec the jukebox.py (so signals like SIGTERM reach it directly)
-exec python jukebox.py
+exec python src/jukebox.py

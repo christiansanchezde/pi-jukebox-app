@@ -30,7 +30,8 @@ sys.stdout = FilterStream(sys.stdout)
 sys.stderr = FilterStream(sys.stderr)
 
 # ——————— Paths & config ———————
-BASE_DIR      = os.path.dirname(__file__)
+# Go up one level from src/ to the project root
+BASE_DIR      = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 MUSIC_ROOT    = os.path.join(BASE_DIR, 'music')
 MAPPING_FILE  = os.path.join(BASE_DIR, 'mappings.cfg')
 LOG_FILE      = os.path.join(BASE_DIR, 'jukebox.log')
