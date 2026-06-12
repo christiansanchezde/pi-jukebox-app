@@ -1,0 +1,15 @@
+[Unit]
+Description=Pi Jukebox Hardware Shutdown Button
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/chris/jukebox
+# Point directly to the virtual environment's Python and the script
+ExecStart=/home/chris/jukebox/.venv/bin/python /home/chris/jukebox/src/shutdown.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

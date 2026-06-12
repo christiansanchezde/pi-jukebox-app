@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""RFID‑controlled jukebox.
-
-Changes in this revision (2025‑07‑15):
-• Removed shuffling: tracks now play in fixed, alphabetical order for every folder.
-• Added “next‑track” logic – if the SAME tag is removed and placed back, playback restarts
-  at the next song in the folder (wraps to the beginning when the end is reached).
-"""
+"""RFID‑controlled jukebox (Embedded Device Refactor with gpiozero)."""
 import os
 import sys
 import asyncio
 import subprocess
 import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import suppress
+from collections import OrderedDict
+
 from mfrc522 import SimpleMFRC522
-import RPi.GPIO as GPIO
+from gpiozero import LED
 
 # ——————— Global filter to drop AUTH ERROR lines ———————
 class FilterStream:
@@ -30,28 +27,27 @@ sys.stdout = FilterStream(sys.stdout)
 sys.stderr = FilterStream(sys.stderr)
 
 # ——————— Paths & config ———————
-# Go up one level from src/ to the project root
 BASE_DIR      = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 MUSIC_ROOT    = os.path.join(BASE_DIR, 'music')
 MAPPING_FILE  = os.path.join(BASE_DIR, 'mappings.cfg')
 LOG_FILE      = os.path.join(BASE_DIR, 'jukebox.log')
-PLAYBACK_LOG  = os.path.join(BASE_DIR, 'playback.log')
 
 # LED pins (BCM numbering)
-GREEN_LED_GPIO = 6    # header pin 29
-BLUE_LED_GPIO  = 12   # header pin 31
-RED_LED_GPIO   = 5    # header pin 33
+GREEN_LED_PIN = 6    
+BLUE_LED_PIN  = 12   
+RED_LED_PIN   = 5    
 
 AUDIO_EXTS     = ('.mp3', '.wav', '.ogg', '.flac')
-POLL_INTERVAL  = 0.2  # seconds between tag polls
-BLINK_INTERVAL = 0.5  # seconds for blue LED blink
+POLL_INTERVAL  = 0.2  
+BLINK_INTERVAL = 0.5  
+MAX_HISTORY    = 50   
 
-# ——————— Logging setup ———————
+# ——————— Embedded Logging Setup ———————
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.ERROR,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        RotatingFileHandler(LOG_FILE, maxBytes=1024*1024, backupCount=1),
         logging.StreamHandler(sys.stdout),
     ]
 )
@@ -59,7 +55,6 @@ logger = logging.getLogger('jukebox')
 
 # ——————— Load tag→folder mappings ———————
 def load_mappings(path):
-    """Return (dict(uid→folder), default_folder_or_None)."""
     mappings, default = {}, None
     try:
         with open(path, 'r') as f:
@@ -73,37 +68,28 @@ def load_mappings(path):
                     default = folder
                 else:
                     mappings[uid] = folder
-        logger.info(f"Loaded {len(mappings)} mappings (default={default!r})")
     except FileNotFoundError:
-        logger.warning(f"No mappings file at {path!r}; only DEFAULT (if any) will apply.")
+        logger.error(f"Mappings file not found at {path!r}.")
+    except Exception as e:
+        logger.error(f"Error reading mappings file: {e}")
     return mappings, default
 
 # ——————— Async playback task ———————
-async def playback(folder: str, uid_hex: str, start_index: int = 0):
-    """Play all tracks in *folder* beginning with *start_index* (0‑based)."""
-    files = sorted(
-        f for f in os.listdir(folder)
-        if f.lower().endswith(AUDIO_EXTS)
-    )
-    if not files:
-        logger.warning(f"No audio files in {folder!r}, skipping playback.")
+async def playback(folder: str, start_index: int = 0):
+    try:
+        files = await asyncio.to_thread(os.listdir, folder)
+        files = sorted(f for f in files if f.lower().endswith(AUDIO_EXTS))
+    except Exception as e:
+        logger.error(f"Failed to read folder {folder!r}: {e}")
         return
 
-    # Rotate list so desired start track is first
+    if not files:
+        return
+
     if start_index:
         files = files[start_index:] + files[:start_index]
 
     paths = [os.path.join(folder, f) for f in files]
-    msg = (
-        f"▶️  Starting playback of {len(paths)} file(s) in “{os.path.basename(folder)}” "
-        f"from index {start_index} for UID={uid_hex}"
-    )
-    print(msg)
-    try:
-        with open(PLAYBACK_LOG, 'a') as flog:
-            flog.write(msg + '\n')
-    except PermissionError as e:
-        logger.error(f"Could not write to playback.log: {e}")
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -114,48 +100,60 @@ async def playback(folder: str, uid_hex: str, start_index: int = 0):
     except FileNotFoundError:
         logger.error("`cvlc` not found. Install VLC (`sudo apt-get install vlc`).")
         return
+    except Exception as e:
+        logger.error(f"Failed to start cvlc subprocess: {e}")
+        return
 
     try:
         await proc.wait()
     except asyncio.CancelledError:
-        proc.terminate()
-        with suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        try:
+            proc.terminate() 
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+        except Exception as e:
+            logger.error(f"Error terminating VLC process: {e}")
         raise
 
 # ——————— Async LED blink task ———————
-async def blink_led(pin: int):
-    state = False
-    while True:
-        state = not state
-        GPIO.output(pin, state)
-        await asyncio.sleep(BLINK_INTERVAL)
+async def blink_led(led: LED):
+    try:
+        while True:
+            led.toggle()
+            await asyncio.sleep(BLINK_INTERVAL)
+    except asyncio.CancelledError:
+        led.off()
+        raise
 
 # ——————— Main loop ———————
 async def main():
-    # GPIO init
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
-    for pin in (GREEN_LED_GPIO, BLUE_LED_GPIO, RED_LED_GPIO):
-        GPIO.setup(pin, GPIO.OUT)
+    # Initialize gpiozero LEDs
+    green_led = LED(GREEN_LED_PIN)
+    blue_led = LED(BLUE_LED_PIN)
+    red_led = LED(RED_LED_PIN)
 
-    # Initial LED states
-    GPIO.output(GREEN_LED_GPIO, GPIO.HIGH)   # ready
-    GPIO.output(BLUE_LED_GPIO, GPIO.LOW)
-    GPIO.output(RED_LED_GPIO, GPIO.LOW)
+    green_led.on()   
+    blue_led.off()
+    red_led.off()
 
-    reader = SimpleMFRC522()
+    try:
+        reader = SimpleMFRC522()
+    except Exception as e:
+        logger.critical(f"Failed to initialize SPI reader: {e}")
+        return
+
     mappings, default_folder = load_mappings(MAPPING_FILE)
 
-    last_uid = None                 # UID currently present
-    play_task = blink_task = None   # async tasks
-    index_map = {}                  # UID → next start index
-
-    logger.info("Jukebox ready. Tap an RFID tag… Ctrl+C to quit.")
+    last_uid = None                 
+    play_task = blink_task = None   
+    index_map = OrderedDict()  
 
     try:
         while True:
-            # Non‑blocking RFID poll
             try:
                 uid, _ = reader.read_no_block()
             except Exception:
@@ -164,8 +162,7 @@ async def main():
             if uid:
                 uid_hex = format(uid, 'X').upper()
                 if uid_hex != last_uid:
-                    # ——— New tag detected ———
-                    # cancel any previous playback/blink
+                    
                     if play_task:
                         play_task.cancel()
                         with suppress(asyncio.CancelledError):
@@ -174,41 +171,43 @@ async def main():
                         blink_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await blink_task
-                    GPIO.output(BLUE_LED_GPIO, GPIO.LOW)
+                            
+                    blue_led.off()
 
                     folder_name = mappings.get(uid_hex, default_folder)
                     if not folder_name:
-                        logger.warning(f"No mapping for UID={uid_hex!r} and no DEFAULT set.")
-                        GPIO.output(RED_LED_GPIO, GPIO.HIGH)
+                        red_led.on()
                     else:
                         folder_path = os.path.join(MUSIC_ROOT, folder_name)
-                        if not os.path.isdir(folder_path):
-                            logger.warning(f"Folder {folder_path!r} not found; skipping.")
-                            GPIO.output(RED_LED_GPIO, GPIO.HIGH)
+                        if not await asyncio.to_thread(os.path.isdir, folder_path):
+                            logger.error(f"Folder mapped to {uid_hex} not found: {folder_path}")
+                            red_led.on()
                         else:
-                            # Compute next index cyclically
-                            files = sorted(
-                                f for f in os.listdir(folder_path)
-                                if f.lower().endswith(AUDIO_EXTS)
-                            )
+                            try:
+                                files = await asyncio.to_thread(os.listdir, folder_path)
+                                files = sorted(f for f in files if f.lower().endswith(AUDIO_EXTS))
+                            except Exception as e:
+                                logger.error(f"File read error on {folder_path}: {e}")
+                                files = []
+
                             if not files:
-                                logger.warning(f"No audio files in {folder_path!r}, skipping.")
-                                GPIO.output(RED_LED_GPIO, GPIO.HIGH)
+                                red_led.on()
                             else:
                                 next_idx = (index_map.get(uid_hex, -1) + 1) % len(files)
                                 index_map[uid_hex] = next_idx
+                                index_map.move_to_end(uid_hex)
+                                if len(index_map) > MAX_HISTORY:
+                                    index_map.popitem(last=False)
 
-                                GPIO.output(RED_LED_GPIO, GPIO.LOW)
+                                red_led.off()
                                 play_task = asyncio.create_task(
-                                    playback(folder_path, uid_hex, start_index=next_idx)
+                                    playback(folder_path, start_index=next_idx)
                                 )
-                                blink_task = asyncio.create_task(blink_led(BLUE_LED_GPIO))
+                                blink_task = asyncio.create_task(blink_led(blue_led))
 
                     last_uid = uid_hex
             else:
-                # ——— No tag present ———
                 if last_uid is not None:
-                    logger.info("Tag removed — stopping playback & LED blink")
                     if play_task:
                         play_task.cancel()
                         with suppress(asyncio.CancelledError):
@@ -217,16 +216,17 @@ async def main():
                         blink_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await blink_task
-                    GPIO.output(BLUE_LED_GPIO, GPIO.LOW)
-                    GPIO.output(RED_LED_GPIO, GPIO.LOW)
+                    
+                    blue_led.off()
+                    red_led.off()
                     last_uid = None
 
             await asyncio.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received — shutting down…")
+        pass 
     except Exception as exc:
-        logger.exception(f"Unhandled exception in main loop: {exc}")
+        logger.critical(f"Unhandled exception in main loop: {exc}")
     finally:
         if play_task:
             play_task.cancel()
@@ -236,16 +236,14 @@ async def main():
             blink_task.cancel()
             with suppress(asyncio.CancelledError):
                 await blink_task
-        GPIO.cleanup()
-        logger.info("Jukebox stopped.")
+        # No GPIO.cleanup() needed, gpiozero handles this automatically!
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
-    except Exception:
-        logger.exception("Unhandled exception at entrypoint, exiting…")
-        try:
-            GPIO.cleanup()
-        except Exception:
-            pass
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        logger = logging.getLogger('jukebox')
+        logger.critical(f"Entrypoint exception: {e}")
         sys.exit(1)

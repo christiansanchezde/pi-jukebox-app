@@ -1,0 +1,15 @@
+[Unit]
+Description=Pi Jukebox RFID Application
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=chris
+WorkingDirectory=/home/chris/jukebox
+# Execute our dynamic bash script
+ExecStart=/bin/bash /home/chris/jukebox/scripts/start.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

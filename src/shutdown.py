@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-import RPi.GPIO as GPIO
+from gpiozero import Button
 import subprocess
+from signal import pause
 
-# Setup GPIO
-GPIO.setmode(GPIO.BCM)
-# Pin 13 for the button, using internal Pull Up resistor
-GPIO.setup(13, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+# Define the button on GPIO 13.
+# 'Button' defaults to pull_up=True and active_state=False (triggers on falling edge)
+shutdown_btn = Button(13)
 
-# Wait for the button (pin 13) to be pulled low (Falling edge)
-# This blocks the script until the event happens, taking 0% CPU
-GPIO.wait_for_edge(13, GPIO.FALLING)
+def shutdown_system():
+    print("Gracefully halting the system...")
+    subprocess.call(['shutdown', '-h', 'now'], shell=False)
 
-# Gracefully halt the system
-subprocess.call(['shutdown', '-h', 'now'], shell=False)
+# Trigger the shutdown function when the button is pressed
+shutdown_btn.when_pressed = shutdown_system
+
+print("Shutdown listener active on GPIO 13. Press the hardware button to halt...")
+
+# Pause keeps the script running in the background, using 0% CPU
+pause()
