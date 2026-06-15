@@ -1,0 +1,21 @@
+# 1. Set the default behavior: auto-detect and normalize line endings
+# This is a safe baseline for all files
+* text=auto
+
+# 2. Enforce LF for code and executable scripts
+# This prevents errors in Linux/WSL environments
+*.py text eol=lf
+*.sh text eol=lf
+
+# 3. Standard text files
+# These are safe to convert to CRLF on Windows and LF on Linux automatically
+*.md text
+*.txt text
+*.cfg text
+
+# 4. Prevent Git from trying to convert binary files
+# This is a safety measure to ensure non-text files are never corrupted
+*.png binary
+*.jpg binary
+*.ico binary
+*.pyc binary
