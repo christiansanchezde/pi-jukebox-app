@@ -1,147 +1,52 @@
-# pi-jukebox-app
-This is the applicaiton repo for the jukebox
+# The Jukebox Project: An Embedded Audio Appliance
 
+**A production-grade, RFID-controlled music player for children, built on modern Raspberry Pi OS.**
 
+<img src="./doc/img/Jukebox.jpg" alt="Jukebox" width="80%"/>
 
-## preapre the envitronment
-
-sudo apt-get update
-sudo apt-get install vlc python3-venv
-sudo apt-get install liblgpio-dev
-sudo apt-get install python3-dev build-essential
-
-
-cd /home/chris/jukebox
-python3 -m venv .venv
-
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install gpiozero lgpio
-
-
-## Enable spi port
-
-Step 1: Enable SPI via raspi-config
-Run this command in your Raspberry Pi SSH terminal:
-
-Bash
-sudo raspi-config
-This will open a text-based menu. Navigate using your arrow keys and the Enter key:
-
-Go down to 3 Interface Options and press Enter.
-
-Go down to I4 SPI and press Enter.
-
-It will ask: "Would you like the SPI interface to be enabled?" Select .
-
-You will see a confirmation saying "The SPI interface is enabled". Press Enter.
-
-Use the Right Arrow key to select  at the bottom of the main menu.
-
-
-## Installign the services
-
-To ensure your Jukebox is a true "plug-and-play" embedded device, we will create two separate `systemd` service files.
-
-One service will run the main application as your standard user (to ensure audio routing works correctly), and the other will run the shutdown listener as `root` (since shutting down the system requires administrator privileges).
-
-### 1. Create the Files in Your VS Code Project
-
-To keep your project repository clean and version-controlled, you should store these configuration files in your `scripts/` folder.
-
-**File 1: `scripts/pi-jukebox.service**`
-
-```ini
-[Unit]
-Description=Pi Jukebox RFID Application
-After=network.target sound.target
-
-[Service]
-Type=simple
-User=chris
-WorkingDirectory=/home/chris/jukebox
-# Execute our dynamic bash script
-ExecStart=/bin/bash /home/chris/jukebox/scripts/start.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-
-```
-
-**File 2: `scripts/pi-shutdown.service**`
-
-```ini
-[Unit]
-Description=Pi Jukebox Hardware Shutdown Button
-After=multi-user.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/home/chris/jukebox
-# Point directly to the virtual environment's Python and the script
-ExecStart=/home/chris/jukebox/.venv/bin/python /home/chris/jukebox/src/shutdown.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-
-```
-
-### 2. Deploy and Install on the Raspberry Pi
-
-1. Save these files locally and press `Ctrl+Shift+B` (or `Cmd+Shift+B`) to run your **Deploy Code (rsync)** task.
-2. SSH into your Raspberry Pi.
-3. Linux `systemd` requires service files to live in a very specific system folder: `/etc/systemd/system/`. Run these commands to copy the files from your project directory into the system directory:
-
-```bash
-# Copy the service files to the systemd directory
-sudo cp /home/chris/jukebox/scripts/pi-jukebox.service /etc/systemd/system/
-sudo cp /home/chris/jukebox/scripts/pi-shutdown.service /etc/systemd/system/
-
-# Set the correct permissions for the service files
-sudo chmod 644 /etc/systemd/system/pi-jukebox.service
-sudo chmod 644 /etc/systemd/system/pi-shutdown.service
-
-```
-
-### 3. Enable and Start the Services
-
-Now we tell the operating system to reload its configuration, enable the scripts to run on boot, and start them immediately. Run these commands in your SSH terminal:
-
-```bash
-# Tell systemd to recognize the new files
-sudo systemctl daemon-reload
-
-# Enable them to start automatically every time the Pi boots up
-sudo systemctl enable pi-jukebox.service
-sudo systemctl enable pi-shutdown.service
-
-# Start them right now in the background
-sudo systemctl start pi-jukebox.service
-sudo systemctl start pi-shutdown.service
-
-```
-
-### 4. Verification
-
-You can check the health of your services at any time using the `status` command.
-
-```bash
-sudo systemctl status pi-jukebox.service
-sudo systemctl status pi-shutdown.service
-
-```
-
-*(Press `q` to exit the status view).*
+*Figure 1: Jukebox*
 
 ---
 
-Once you have these running, the Pi will operate entirely headless—if you pull the power plug and plug it back in, the Green LED will light up automatically once it finishes booting, ready for a tag.
+## 📑 Table of Contents
+* [📖 The Story](#-the-story)
+* [🎮 How It Works](#-how-it-works)
+* [🏗️ Architecture Summary](#-architecture-summary) (Full details in [`doc/architecture.md`](./doc/ARCHITECTURE.md))
+* [🚀 Setup & Deployment](#-setup--deployment) (Full guide in [`doc/setup.md`](./doc/SETUP.md))
+* [📂 Resources (Schematics & 3D Case)](#-resources)
 
-Would you like to perform a hard reboot (`sudo reboot`) to verify the fully automated startup sequence works exactly as intended?
+---
 
-chmod +x scripts/normalize_audio.sh
+## 📖 The Story
+This project started as a summer vacation experiment to build a music player for my children. Originally, it was a "vibe-coded" prototype running on a standard Raspberry Pi OS, held together by manual scripts and SD card backups.
+
+While I previously migrated the entire stack to the Yocto Project to harden it into a custom OS image, the transition to Debian 13 (Trixie) and Kernel 6.12+ fundamentally changed how Linux handles hardware GPIO. This repository represents the definitive, modern refactor: it abandons deprecated legacy libraries in favor of `gpiozero` and strict Python virtual environments, delivering appliance like stability on a standard, easily updatable Raspberry Pi OS.
+
+## 🎮 How It Works
+The user interaction is designed to be screen-free and intuitive for children:
+
+1.  **Place a Tag:** The system reads the RFID UID and looks it up in `mappings.cfg`. If recognized, it plays the specific folder associated with that toy/card.
+2.  **Remove the Tag:** Playback stops immediately.
+3.  **Smart Resume:** If the *same* tag is placed again, the system remembers the position and plays the **next** song in the folder (cycling through the album).
+4.  **Default Mode:** If an unknown tag is used (or configured as such), the system plays from a "Random Mix" folder.
+
+## 🏗️ Architecture Summary
+*   **Hardware:** Raspberry Pi 3B + MFRC522 RFID Reader (SPI) + GPIO LEDs and Controls.
+*   **OS:** Raspberry Pi OS (Debian 13 / Trixie).
+*   **Application:** Python 3.12+ (Virtual Environment) + VLC (`cvlc`) + Systemd.
+
+> 🔌 **Hardware Details:** For precise header pinouts, component wiring, and a detailed breakdown of the execution flow, please see **[doc/architecture.md](./doc/ARCHITECTURE.md)**.
+
+## 🚀 Setup & Deployment
+Deploying this project requires configuring the Pi hardware, setting up a local developer environment, and syncing normalized audio files.
+
+> 🛠️ **Installation Guide:** For step-by-step instructions on setting up the target hardware, installing the Systemd services, and deploying code automatically via VS Code, please see **[doc/setup.md](./doc/SETUP.md)**.
+
+## 📂 Resources
+*   **Schematics:**
+
+<img src="./doc/img/schematic.png" alt="Jukebox Hardware Schematic" width="80%"/>
+
+*Figure 2: Jukebox Hardware Schematic*
+
+*   **[3D Printed Case](./doc/case)**

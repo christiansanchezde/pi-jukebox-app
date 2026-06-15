@@ -1,0 +1,53 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Deploy Code (rsync)",
+            "type": "shell",
+            "command": "rsync",
+            "args": [
+                "-avz",
+                "--delete",
+                "--exclude-from=${workspaceFolder}/.gitignore",
+                "--exclude='.git/'",
+                "--exclude='.vscode/'",
+                "--exclude='.venv/'",
+                "--exclude='.venv-host/'",
+                "${workspaceFolder}/",
+                "[USER]@[PI_IP_ADDRESS]:/home/[USER]/jukebox/"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Sync Music Directory (rsync)",
+            "type": "shell",
+            "command": "rsync",
+            "args": [
+                "-avz",
+                "--delete",
+                "${workspaceFolder}/music/",
+                "[USER]@[PI_IP_ADDRESS]:/home/[USER]/jukebox/music/"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Normalize Music (Host)",
+            "type": "shell",
+            "command": "./scripts/normalize_audio.sh",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
