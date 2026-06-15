@@ -222,3 +222,6 @@ music/
 !music/demo.*
 *.log
 playback.log
+
+backups/
+.venv-host/

@@ -143,3 +143,5 @@ sudo systemctl status pi-shutdown.service
 Once you have these running, the Pi will operate entirely headless—if you pull the power plug and plug it back in, the Green LED will light up automatically once it finishes booting, ready for a tag.
 
 Would you like to perform a hard reboot (`sudo reboot`) to verify the fully automated startup sequence works exactly as intended?
+
+chmod +x scripts/normalize_audio.sh
